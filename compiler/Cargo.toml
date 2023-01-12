@@ -16,6 +16,9 @@ bench = false
 [dependencies]
 chrono = "0.4.19"
 colored = "2.0.0"
+cranelift = "0.91.0"
+cranelift-module = "0.91.0"
+cranelift-object = "0.91.0"
 im = "15.1.0"
 itertools = { version = "0.10.0" }
 lazy_static = "1.4.0"
@@ -36,10 +39,11 @@ serde_json = "1.0.80"
 structopt = "0.3.25"
 strum = "0.24.0"
 strum_macros = "0.24"
+target-lexicon = "0.12.5"
 tokio = { version = "1.23.1", features = ["full"] }
 tokio-util = "0.7.1"
 tower-lsp = "0.17.0"
-tracing = { version = "0.1", features = ["release_max_level_debug"] }
+tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.2.0", features = ["registry"] }
 unicode-segmentation = "1.9.0"
 url = "2.2.2"

@@ -9,6 +9,7 @@
 
 mod builtin_functions;
 mod compiler;
+mod cranelift_compiler;
 mod database;
 mod fuzzer;
 mod language_server;
@@ -64,6 +65,7 @@ use vm::{ChannelId, CompletedOperation, OperationId};
 #[structopt(name = "candy", about = "The 🍭 Candy CLI.")]
 enum CandyOptions {
     Build(CandyBuildOptions),
+    BuildBinary(CandyBinaryBuildOptions),
     Run(CandyRunOptions),
     Fuzz(CandyFuzzOptions),
     Lsp,
@@ -71,6 +73,21 @@ enum CandyOptions {
 
 #[derive(StructOpt, Debug)]
 struct CandyBuildOptions {
+    #[structopt(long)]
+    debug: bool,
+
+    #[structopt(long)]
+    watch: bool,
+
+    #[structopt(long)]
+    tracing: bool,
+
+    #[structopt(parse(from_os_str))]
+    file: PathBuf,
+}
+
+#[derive(StructOpt, Debug)]
+struct CandyBinaryBuildOptions {
     #[structopt(long)]
     debug: bool,
 
@@ -109,6 +126,7 @@ struct CandyFuzzOptions {
 async fn main() -> ProgramResult {
     match CandyOptions::from_args() {
         CandyOptions::Build(options) => build(options),
+        CandyOptions::BuildBinary(options) => build_binary(options),
         CandyOptions::Run(options) => run(options),
         CandyOptions::Fuzz(options) => fuzz(options).await,
         CandyOptions::Lsp => lsp().await,
@@ -121,6 +139,106 @@ enum Exit {
     FileNotFound,
     FuzzingFoundFailingCases,
     CodePanicked,
+}
+
+fn build_binary(options: CandyBinaryBuildOptions) -> ProgramResult {
+    init_logger(true);
+    let db = Database::default();
+    let module = Module::from_package_root_and_file(
+        current_dir().unwrap(),
+        options.file.clone(),
+        ModuleKind::Code,
+    );
+    let tracing = TracingConfig {
+        register_fuzzables: TracingMode::Off,
+        calls: TracingMode::all_or_off(options.tracing),
+        evaluated_expressions: TracingMode::all_or_off(options.tracing),
+    };
+    let result = raw_build_binary(&db, module, &tracing, options.debug);
+
+    result.ok_or(Exit::FileNotFound).map(|_| ())
+}
+
+fn raw_build_binary(
+    db: &Database,
+    module: Module,
+    tracing: &TracingConfig,
+    debug: bool,
+) -> Option<()> {
+    let rcst = db
+        .rcst(module.clone())
+        .unwrap_or_else(|err| panic!("Error parsing file `{}`: {:?}", module, err));
+    if debug {
+        module.dump_associated_debug_file("rcst", &format!("{:#?}\n", rcst));
+    }
+
+    let cst = db.cst(module.clone()).unwrap();
+    if debug {
+        module.dump_associated_debug_file("cst", &format!("{:#?}\n", cst));
+    }
+
+    let (asts, ast_cst_id_map) = db.ast(module.clone()).unwrap();
+    if debug {
+        module.dump_associated_debug_file(
+            "ast",
+            &format!("{}\n", asts.iter().map(|ast| format!("{}", ast)).join("\n")),
+        );
+        module.dump_associated_debug_file(
+            "ast_to_cst_ids",
+            &ast_cst_id_map
+                .keys()
+                .sorted_by_key(|it| it.local)
+                .map(|key| format!("{key} -> {}\n", ast_cst_id_map[key].0))
+                .join(""),
+        );
+    }
+
+    let (hir, hir_ast_id_map) = db.hir(module.clone()).unwrap();
+    if debug {
+        module.dump_associated_debug_file("hir", &format!("{}", hir));
+        module.dump_associated_debug_file(
+            "hir_to_ast_ids",
+            &hir_ast_id_map
+                .keys()
+                .map(|key| format!("{key} -> {}\n", hir_ast_id_map[key]))
+                .join(""),
+        );
+    }
+
+    let mut errors = vec![];
+    hir.collect_errors(&mut errors);
+    for CompilerError {
+        module,
+        span,
+        payload,
+    } in errors
+    {
+        let (start_line, start_col) = db.offset_to_lsp(module.clone(), span.start);
+        let (end_line, end_col) = db.offset_to_lsp(module.clone(), span.end);
+        warn!("{module}:{start_line}:{start_col} – {end_line}:{end_col}: {payload}");
+    }
+
+    let mir = db.mir(module.clone(), tracing.clone()).unwrap();
+    if debug {
+        module.dump_associated_debug_file("mir", &format!("{mir}"));
+    }
+
+    let optimized_mir = db
+        .mir_with_obvious_optimized(module.clone(), tracing.clone())
+        .unwrap();
+    if debug {
+        module.dump_associated_debug_file("optimized_mir", &format!("{optimized_mir}"));
+    }
+
+    cranelift_compiler::compile(optimized_mir).unwrap();
+
+    /*let lir = db.lir(module.clone(), tracing.clone()).unwrap();
+    if debug {
+        module.dump_associated_debug_file("lir", &format!("{lir}"));
+    }
+
+    Some(lir)*/
+    Some(())
 }
 
 fn build(options: CandyBuildOptions) -> ProgramResult {

@@ -9,6 +9,7 @@
 
 pub mod builtin_functions;
 pub mod compiler;
+pub mod cranelift_compiler;
 pub mod database;
 pub mod fuzzer;
 pub mod language_server;
