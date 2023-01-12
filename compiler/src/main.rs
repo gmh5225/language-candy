@@ -230,7 +230,8 @@ fn raw_build_binary(
         module.dump_associated_debug_file("optimized_mir", &format!("{optimized_mir}"));
     }
 
-    cranelift_compiler::compile(optimized_mir).unwrap();
+    let mut codegen = cranelift_compiler::CodeGen::new(optimized_mir);
+    codegen.compile().unwrap();
 
     /*let lir = db.lir(module.clone(), tracing.clone()).unwrap();
     if debug {
